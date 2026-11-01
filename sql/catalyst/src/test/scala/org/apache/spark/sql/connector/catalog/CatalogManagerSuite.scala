@@ -164,6 +164,25 @@ class CatalogManagerSuite extends SparkFunSuite with SQLHelper {
     }
   }
 
+  test("close should close the other catalogs when closing one is interrupted") {
+    val catalogManager = new DefaultCatalogManager(new CloseableCatalog, createSessionCatalog())
+    withSQLConf("spark.sql.catalog.interrupting" -> classOf[InterruptingCloseableCatalog].getName,
+      "spark.sql.catalog.closeable" -> classOf[CloseableCatalog].getName) {
+      val interrupting =
+        catalogManager.catalog("interrupting").asInstanceOf[InterruptingCloseableCatalog]
+      val closeable = catalogManager.catalog("closeable").asInstanceOf[CloseableCatalog]
+      try {
+        catalogManager.close()
+        assert(interrupting.closed)
+        assert(closeable.closed)
+        // The interrupt status is restored once all the catalogs are closed.
+        assert(Thread.currentThread().isInterrupted)
+      } finally {
+        Thread.interrupted()
+      }
+    }
+  }
+
   test("close should close a custom v2 session catalog") {
     val catalogManager = new DefaultCatalogManager(new CloseableCatalog, createSessionCatalog())
     withSQLConf(
@@ -402,6 +421,13 @@ object BlockingInitializeCatalog {
     initializing = new CountDownLatch(1)
     resume = new CountDownLatch(1)
     lastInstance = null
+  }
+}
+
+class InterruptingCloseableCatalog extends CloseableCatalog {
+  override def close(): Unit = {
+    super.close()
+    throw new InterruptedException("interrupted while closing")
   }
 }
 

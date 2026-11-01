@@ -566,17 +566,25 @@ private[sql] class DefaultCatalogManager(
       catalogs.clear()
       entries
     }
+    var interrupted = false
     loaded.foreach {
       case (name, closeable: AutoCloseable) =>
         try {
           closeable.close()
         } catch {
-          // A catalog loaded by a session classloader can fail with a `LinkageError` while
-          // closing. It must not prevent the other catalogs from being closed.
+          // A failure to close one catalog must not prevent the other catalogs from being closed.
+          // This includes a `LinkageError` from a catalog loaded by a session classloader, and an
+          // interruption, after which the interrupt status is restored once all are closed.
+          case e: InterruptedException =>
+            interrupted = true
+            logWarning(log"Interrupted while closing catalog ${MDC(CATALOG_NAME, name)}", e)
           case e @ (NonFatal(_) | _: LinkageError) =>
             logWarning(log"Failed to close catalog ${MDC(CATALOG_NAME, name)}", e)
         }
       case _ =>
+    }
+    if (interrupted) {
+      Thread.currentThread().interrupt()
     }
   }
 }
